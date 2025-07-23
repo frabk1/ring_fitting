@@ -1,0 +1,2 @@
+import ehtim as eh
+im = eh.image.load_image('Downloads/im1/jpeg')
