@@ -1,39 +1,37 @@
 import numpy as np
 
-def rbp_find_bright_points(img, threshold, radius, max_it=999):
-    """
-    Finds bright points above `threshold`, zeroing out a circular region
-    of `radius` around each found peak. Returns an (N,2) array of (x, y).
-    """
-    data = np.array(img)
+def _img_to_array(img):
+    if hasattr(img, "imarr"):
+        arr = img.imarr
+    else:
+        arr = np.array(img)
+    arr = np.squeeze(arr)
+    if arr.ndim > 2:
+        arr = arr[0]
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2D image array, got shape {arr.shape}")
+    return arr
+
+def rbp_find_bright_points(img, threshold, radius, margin=None, max_it=999):
+    data = _img_to_array(img)
     h, w = data.shape
-    mask = np.ones_like(data, bool)
-    pts = []
-
+    if margin is None:
+        margin = int(np.ceil(radius + 1))
+    mask = np.ones_like(data, dtype=bool)
+    points = []
     for _ in range(max_it):
-        m = data * mask
-        y, x = np.unravel_index(np.argmax(m), m.shape)
-        if m[y, x] < threshold:
+        masked_data = data * mask
+        peak = masked_data.max()
+        if peak < threshold:
             break
-        pts.append((x, y))
-        yy, xx = np.ogrid[:h, :w]
-        mask[(yy - y)**2 + (xx - x)**2 <= radius**2] = False
-
-    return np.array(pts)
-
-
-def polygon_for_ring(xs, ys, r_in, r_out, angs):
-    """
-    Build a closed polygon following two arcs (inner & outer).
-    - xs, ys: center
-    - r_in, r_out: inner/outer radii
-    - angs: 1D array of angles in radians
-    Returns an (2*len(angs), 2) array of vertices.
-    """
-    xi = xs + r_in * np.cos(angs)
-    yi = ys + r_in * np.sin(angs)
-    xo = xs + r_out * np.cos(angs[::-1])
-    yo = ys + r_out * np.sin(angs[::-1])
-    x = np.concatenate([xi, xo])
-    y = np.concatenate([yi, yo])
-    return np.vstack([x, y]).T
+        y, x = np.unravel_index(np.argmax(masked_data), data.shape)
+        if x < margin or x >= (w - margin) or y < margin or y >= (h - margin):
+            mask[y, x] = False
+            continue
+        points.append((x, y))
+        y0, y1 = max(0, y - int(radius)), min(h, y + int(radius) + 1)
+        x0, x1 = max(0, x - int(radius)), min(w, x + int(radius) + 1)
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        dist = np.sqrt((xx - x)**2 + (yy - y)**2)
+        mask[y0:y1, x0:x1][dist <= radius] = False
+    return np.array(points)
