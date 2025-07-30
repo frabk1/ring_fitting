@@ -1,68 +1,48 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
-from .extraction import rbp_find_bright_points
-from .fitting import fit_circle, fit_ellipse, fit_limacon
-from .utils import (
-    estimate_center_via_triangles,
-    geometric_centroid,
-    flux_center,
-    thresholded_flux_center,
-    radial_fwhm_profile
-)
+from . import extraction as ex
+from . import fitting as fit
+from . import utils
 
 class AnalysisObject:
-    def __init__(self, image):
-        self.im = image
-        self.data = np.array(image)
+    def __init__(self, im):
+        self.image = im
+        self.data = im.imarr
+        self.npix = im.npix
+        self.cell = im.psize
+        self.ra = im.ra
+        self.dec = im.dec
+        self.peak = im.peak
+        self.total_flux = im.total
+        self.xarr = im.x
+        self.yarr = im.y
+        self.compute_centers()
+        self.bright_points = None
 
-    def run(self, thresh=0.5, rad=5.0, plot=True):
-        # 1) find bright points
-        pts = rbp_find_bright_points(self.im, thresh, rad)
-        # 2) several center estimates
-        geo_c = geometric_centroid(pts)
-        flux_c = flux_center(self.im)
-        th_c = thresholded_flux_center(self.im)
-        tri_c = estimate_center_via_triangles(pts)
-        # 3) fits
-        r_circ = fit_circle(pts, *tri_c)
-        e_w, e_h = fit_ellipse(pts, *tri_c)
-        lc_c, lc_L2, lc_phi = fit_limacon(pts, *tri_c)
-        # 4) width profile
-        angs = np.arctan2(pts[:,1]-tri_c[1], pts[:,0]-tri_c[0])
-        widths = radial_fwhm_profile(self.im, tri_c, angs)
+    def compute_centers(self):
+        self.geo_c = utils.geometric_centroid(self.data)
+        self.flux_c = utils.flux_center(self.data)
+        self.q25_c = utils.threshold_center(self.data, q=25)
 
-        if plot:
-            fig, axs = plt.subplots(2,2, figsize=(8,8))
-            ax = axs[0,0]
-            ax.imshow(self.data, origin='lower', cmap='gray')
-            ax.scatter(pts[:,0], pts[:,1], s=20, c='r')
-            ax.set_title("Bright points")
+    def find_bright_points(self, threshold=0.5, radius=5.0, margin=None, max_it=999):
+        self.bright_points = ex.rbp_find_bright_points(self.image, threshold, radius, margin, max_it)
+        return self.bright_points
 
-            ax = axs[0,1]
-            ax.bar(['circ','ellipse h','ellipse w','limacon L2'], [r_circ, e_h/2, e_w/2, lc_L2])
-            ax.set_title("Shape params")
-
-            ax = axs[1,0]
-            centers = np.vstack([geo_c, flux_c, th_c, tri_c])
-            labels = ['geo','flux','thresh','tri']
-            ax.scatter(centers[:,0], centers[:,1], c='k')
-            for lab,(x,y) in zip(labels, centers):
-                ax.text(x,y,lab)
-            ax.set_title("Center estimates")
-
-            ax = axs[1,1]
-            ax.plot(np.sort(angs), np.sort(widths), '.-')
-            ax.set_title("Radial FWHM vs angle")
-
-            plt.tight_layout()
-            plt.show()
-
-        return {
-            'points': pts,
-            'centers': dict(geo=geo_c, flux=flux_c, thresh=th_c, tri=tri_c),
-            'circle_radius': r_circ,
-            'ellipse_dims': (e_w, e_h),
-            'limacon': (lc_c, lc_L2, lc_phi),
-            'widths': widths,
-        }
+    def plot_centers(self):
+        fig, ax = plt.subplots(figsize=(6,6))
+        extent = [self.image.x[0,0], self.image.x[0,-1], self.image.y[0,0], self.image.y[-1,0]]
+        ax.imshow(self.data, origin='lower', cmap='afmhot', extent=extent)
+        gx, gy = self.geo_c
+        fx, fy = self.flux_c
+        tx, ty = self.q25_c
+        gx, gy = self.xarr[int(round(gy)), int(round(gx))], self.yarr[int(round(gy)), int(round(gx))]
+        fx, fy = self.xarr[int(round(fy)), int(round(fx))], self.yarr[int(round(fy)), int(round(fx))]
+        tx, ty = self.xarr[int(round(ty)), int(round(tx))], self.yarr[int(round(ty)), int(round(tx))]
+        ax.plot(gx, gy, 'wo', label='Geometric')
+        ax.plot(fx, fy, 'go', label='Flux Center')
+        ax.plot(tx, ty, 'bo', label='Threshold Center')
+        ax.legend()
+        ax.set_title("Centers Overlaid on Image")
+        ax.set_xlabel('x [μas]')
+        ax.set_ylabel('y [μas]')
+        return fig
