@@ -1,21 +1,19 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from . import extraction as ex
-from . import fitting as fit
 from . import utils
 
 class AnalysisObject:
     def __init__(self, im):
         self.image = im
-        self.data = im.imarr
-        self.npix = im.npix
+        self.data = im.imarr()
+        self.xdim = im.xdim
+        self.ydim = im.ydim
         self.cell = im.psize
         self.ra = im.ra
         self.dec = im.dec
-        self.peak = im.peak
-        self.total_flux = im.total
-        self.xarr = im.x
-        self.yarr = im.y
+        self.peak = getattr(im, 'peak', None)
+        self.total_flux = im.total_flux()
         self.compute_centers()
         self.bright_points = None
 
@@ -30,19 +28,17 @@ class AnalysisObject:
 
     def plot_centers(self):
         fig, ax = plt.subplots(figsize=(6,6))
-        extent = [self.image.x[0,0], self.image.x[0,-1], self.image.y[0,0], self.image.y[-1,0]]
+        extent = [0, self.xdim*self.cell, 0, self.ydim*self.cell]
         ax.imshow(self.data, origin='lower', cmap='afmhot', extent=extent)
+
         gx, gy = self.geo_c
         fx, fy = self.flux_c
         tx, ty = self.q25_c
-        gx, gy = self.xarr[int(round(gy)), int(round(gx))], self.yarr[int(round(gy)), int(round(gx))]
-        fx, fy = self.xarr[int(round(fy)), int(round(fx))], self.yarr[int(round(fy)), int(round(fx))]
-        tx, ty = self.xarr[int(round(ty)), int(round(tx))], self.yarr[int(round(ty)), int(round(tx))]
-        ax.plot(gx, gy, 'wo', label='Geometric')
-        ax.plot(fx, fy, 'go', label='Flux Center')
-        ax.plot(tx, ty, 'bo', label='Threshold Center')
+        ax.plot(gx*self.cell, gy*self.cell, 'wo', label='Geometric')
+        ax.plot(fx*self.cell, fy*self.cell, 'go', label='Flux Center')
+        ax.plot(tx*self.cell, ty*self.cell, 'bo', label='Threshold Center')
         ax.legend()
-        ax.set_title("Centers Overlaid on Image")
-        ax.set_xlabel('x [μas]')
-        ax.set_ylabel('y [μas]')
+        ax.set_title("Centers Overlaid")
+        ax.set_xlabel('x [radian]')
+        ax.set_ylabel('y [radian]')
         return fig
