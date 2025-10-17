@@ -2,10 +2,12 @@ import numpy as np
 from scipy.optimize import minimize
 
 def fit_circle(points, xs, ys):
+    """Quick circle fit: mean radius from center."""
     r = np.sqrt((points[:, 0] - xs) ** 2 + (points[:, 1] - ys) ** 2)
     return r.mean()
 
 def fit_ellipse(points, xs, ys):
+    """Axis-only ellipse fit around (xs, ys)."""
     x, y = points[:, 0] - xs, points[:, 1] - ys
     def cost(ab):
         a, b = ab
@@ -19,6 +21,7 @@ def fit_ellipse(points, xs, ys):
     return 2 * a, 2 * b
 
 def fit_limacon(points, xs, ys):
+    """Limacon fit: r = c*(1 + L2*cos(theta - phi))."""
     dx, dy = points[:, 0] - xs, points[:, 1] - ys
     r_obs = np.sqrt(dx * dx + dy * dy)
     th_obs = np.arctan2(dy, dx)
@@ -39,9 +42,11 @@ def fit_limacon(points, xs, ys):
     return float(c), float(L2), float(phi)
 
 def _wrap_angle_pi(phi):
+    """Wrap angle to [-pi, pi]."""
     return (phi + np.pi) % (2 * np.pi) - np.pi
 
 def _default_desired(shape, params, xs, ys):
+    """Tiny helper: standard fields for outputs."""
     out = {"center": (float(xs), float(ys))}
     if shape == "circle":
         (r,) = params
@@ -89,6 +94,7 @@ def general_fit(
     return_desired=False,
     desired=None,
 ):
+    """Unified fitter for circle/ellipse/limacon around (xs, ys)."""
     shape = str(shape).lower()
     points = np.asarray(points, dtype=float)
     xs = float(xs)

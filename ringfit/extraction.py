@@ -1,6 +1,7 @@
 import numpy as np
 
 def _img_to_array(img):
+    """Get a clean 2D numpy array from the image."""
     arr = img.imarr()
     arr = np.squeeze(arr)
     if arr.ndim != 2:
@@ -8,6 +9,7 @@ def _img_to_array(img):
     return arr
 
 def _flux_center(data):
+    """Flux-weighted center (x, y) using nonnegative weights."""
     h, w = data.shape
     yy, xx = np.mgrid[0:h, 0:w]
     wts = np.maximum(data, 0.0)
@@ -19,6 +21,7 @@ def _flux_center(data):
     return float(xc), float(yc)
 
 def _estimate_background(data, patch_frac=0.12):
+    """Quick background estimate from the darkest corner patches."""
     h, w = data.shape
     k = max(1, int(patch_frac * min(h, w)))
     patches = [
@@ -31,6 +34,7 @@ def _estimate_background(data, patch_frac=0.12):
     return float(min(means))
 
 def _radial_profile(data, xc, yc, bin_size=1.0):
+    """Azimuthal average vs radius around (xc, yc)."""
     h, w = data.shape
     yy, xx = np.mgrid[0:h, 0:w]
     rr = np.sqrt((xx - xc) ** 2 + (yy - yc) ** 2).ravel()
@@ -46,11 +50,13 @@ def _radial_profile(data, xc, yc, bin_size=1.0):
     return r_centers, prof
 
 def _smooth_profile(prof):
+    """Tiny 1D smooth to quiet pixel noise."""
     k = np.array([1, 2, 3, 2, 1], dtype=float)
     k /= k.sum()
     return np.convolve(prof, k, mode="same")
 
 def _fwhm_width(r, prof, peak_idx, background):
+    """FWHM-style width around a peak; falls back to moment width."""
     p_peak = prof[peak_idx]
     half = background + 0.5 * (p_peak - background)
     i_left = None
@@ -85,19 +91,88 @@ def _fwhm_width(r, prof, peak_idx, background):
     var = (pw * (rw - mu) ** 2).sum() / sw
     return float(max(2.0, 2.355 * np.sqrt(max(var, 1e-12))))
 
-def estimate_ring_parameters(img, bin_size=1.0, patch_frac=0.12):
+def estimate_ring_parameters(img, bin_size=1.0, patch_frac=0.12, n_theta=180, step=0.5):
+    """Fast ring guesses: radius, width, peak, background, and center."""
     data = _img_to_array(img)
-    xc, yc = _flux_center(data)
-    r, prof = _radial_profile(data, xc, yc, bin_size=bin_size)
-    prof_s = _smooth_profile(prof)
-    peak_idx = int(np.nanargmax(prof_s))
-    background = _estimate_background(data, patch_frac=patch_frac)
-    radius = float(r[peak_idx])
-    width = _fwhm_width(r, prof_s, peak_idx, background)
-    peak_value = float(prof_s[peak_idx])
-    return radius, width, peak_value, background, (xc, yc)
+    h, w = data.shape
+    bkg = _estimate_background(data, patch_frac=patch_frac)
+
+    # center = image middle (as requested)
+    xc, yc = (w - 1) / 2.0, (h - 1) / 2.0
+
+    rmax = float(np.hypot(h, w))
+    thetas = np.linspace(0.0, 2.0 * np.pi, int(n_theta), endpoint=False)
+
+    radii = []
+    widths = []
+    peak_vals = []
+
+    k = np.array([1, 2, 3, 2, 1], float)  # light smoothing for 1D ray profiles
+    k /= k.sum()
+
+    for th in thetas:
+        rs = np.arange(0.0, rmax, float(step))
+        xs = xc + rs * np.cos(th)
+        ys = yc + rs * np.sin(th)
+
+        m = (xs >= 0) & (xs <= w - 1) & (ys >= 0) & (ys <= h - 1)
+        if not np.any(m):
+            continue
+        xs, ys, rs = xs[m], ys[m], rs[m]
+        if rs.size < 3:
+            continue
+
+        ix = np.rint(xs).astype(int)
+        iy = np.rint(ys).astype(int)
+        prof = data[iy, ix]
+        prof_s = np.convolve(prof, k, mode="same")
+
+        j = int(np.nanargmax(prof_s))
+        vmax = float(prof_s[j])
+        peak_vals.append(vmax)
+        radii.append(float(rs[j]))
+
+        half = bkg + 0.5 * (vmax - bkg)
+
+        jl = j
+        while jl > 0 and prof_s[jl] > half:
+            jl -= 1
+        jr = j
+        L = len(prof_s)
+        while jr < L - 1 and prof_s[jr] > half:
+            jr += 1
+
+        def _interp_r(i0, i1):
+            y0, y1 = prof_s[i0], prof_s[i1]
+            r0, r1 = rs[i0], rs[i1]
+            if y1 == y0:
+                return r0
+            t = (half - y0) / (y1 - y0)
+            return r0 + t * (r1 - r0)
+
+        if jl > 0 and jr < L - 1:
+            rL = _interp_r(jl, jl + 1)
+            rR = _interp_r(jr - 1, jr)
+            widths.append(float(max(1e-6, rR - rL)))
+
+    if len(radii) == 0:
+        """Fallback: use global radial profile if rays fail."""
+        r, prof = _radial_profile(data, xc, yc, bin_size=bin_size)
+        ps = _smooth_profile(prof)
+        idx = int(np.nanargmax(ps))
+        radius = float(r[idx])
+        width = _fwhm_width(r, ps, idx, bkg)
+        peak_value = float(ps[idx])
+    else:
+        radius = float(np.median(radii))
+        width = float(np.median(widths)) if widths else max(2.0, 0.1 * radius)
+        peak_value = float(np.max(peak_vals))
+
+    return radius, width, peak_value, float(bkg), (xc, yc)
+
 
 def rbp_find_bright_points(img, threshold=None, radius=None, margin=None, max_it=999):
+    """Recursive brightest-point finder with circular blanking."""
     data = _img_to_array(img)
     if threshold is None or radius is None:
         r0, w0, pmax, bkg, _ = estimate_ring_parameters(img)
