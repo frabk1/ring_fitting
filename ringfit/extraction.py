@@ -1,7 +1,33 @@
+# ============================
+# extraction.py
+# ============================
+
+"""
+====================================
+
+* **Filename**:          extraction.py
+* **Author**:            Frank Myhre
+* **Description**:  
+
+====================================
+
+**Notes**
+* Utilities for extracting ring points and single-number ring features from images.
+"""
+
 import numpy as np
 
 def _img_to_array(img):
-    """Get a clean 2D numpy array from the image."""
+    """
+    Get a clean 2D numpy array from the image.
+
+    **Args**:
+    * img (ehtim.Image or similar): image object exposing `imarr()` or `imarr`.
+
+    **Returns**:
+    * arr (np.ndarray): 2D float array (H, W) representing image data.
+
+    """
     arr = img.imarr()
     arr = np.squeeze(arr)
     if arr.ndim != 2:
@@ -9,7 +35,16 @@ def _img_to_array(img):
     return arr
 
 def _flux_center(data):
-    """Flux-weighted center (x, y) using nonnegative weights."""
+    """
+    Flux-weighted center (x, y) using nonnegative weights.
+
+    **Args**:
+    * data (np.ndarray): 2D image array (H, W), nonnegative preferred.
+
+    **Returns**:
+    * center (tuple[float, float]): (xc, yc) in pixel coordinates.
+
+    """
     h, w = data.shape
     yy, xx = np.mgrid[0:h, 0:w]
     wts = np.maximum(data, 0.0)
@@ -21,7 +56,17 @@ def _flux_center(data):
     return float(xc), float(yc)
 
 def _estimate_background(data, patch_frac=0.12):
-    """Quick background estimate from the darkest corner patches."""
+    """
+    Quick background estimate from the darkest corner patches.
+
+    **Args**:
+    * data (np.ndarray): 2D image array (H, W).
+    * patch_frac (float): fractional patch size based on min(H, W).
+
+    **Returns**:
+    * background (float): estimated background level.
+
+    """
     h, w = data.shape
     k = max(1, int(patch_frac * min(h, w)))
     patches = [
@@ -34,7 +79,20 @@ def _estimate_background(data, patch_frac=0.12):
     return float(min(means))
 
 def _radial_profile(data, xc, yc, bin_size=1.0):
-    """Azimuthal average vs radius around (xc, yc)."""
+    """
+    Azimuthal average vs radius around (xc, yc).
+
+    **Args**:
+    * data (np.ndarray): 2D image array (H, W).
+    * xc (float): x-coordinate of center.
+    * yc (float): y-coordinate of center.
+    * bin_size (float): radial bin size in pixels.
+
+    **Returns**:
+    * r_centers (np.ndarray): radius centers for bins.
+    * prof (np.ndarray): azimuthally averaged profile at r_centers.
+
+    """
     h, w = data.shape
     yy, xx = np.mgrid[0:h, 0:w]
     rr = np.sqrt((xx - xc) ** 2 + (yy - yc) ** 2).ravel()
@@ -50,13 +108,34 @@ def _radial_profile(data, xc, yc, bin_size=1.0):
     return r_centers, prof
 
 def _smooth_profile(prof):
-    """Tiny 1D smooth to quiet pixel noise."""
+    """
+    Tiny 1D smooth to quiet pixel noise.
+
+    **Args**:
+    * prof (np.ndarray): 1D profile array.
+
+    **Returns**:
+    * smoothed (np.ndarray): smoothed profile, same shape as input.
+
+    """
     k = np.array([1, 2, 3, 2, 1], dtype=float)
     k /= k.sum()
     return np.convolve(prof, k, mode="same")
 
 def _fwhm_width(r, prof, peak_idx, background):
-    """FWHM-style width around a peak; falls back to moment width."""
+    """
+    FWHM-style width around a peak; falls back to moment width.
+
+    **Args**:
+    * r (np.ndarray): radius array (same length as prof).
+    * prof (np.ndarray): profile values over r.
+    * peak_idx (int): index of the peak in prof.
+    * background (float): background level for half-max.
+
+    **Returns**:
+    * width (float): estimated FWHM-like width in pixel units.
+
+    """
     p_peak = prof[peak_idx]
     half = background + 0.5 * (p_peak - background)
     i_left = None
@@ -92,7 +171,24 @@ def _fwhm_width(r, prof, peak_idx, background):
     return float(max(2.0, 2.355 * np.sqrt(max(var, 1e-12))))
 
 def estimate_ring_parameters(img, bin_size=1.0, patch_frac=0.12, n_theta=180, step=0.5):
-    """Fast ring guesses: radius, width, peak, background, and center."""
+    """
+    Fast ring guesses: radius, width, peak, background, and center.
+
+    **Args**:
+    * img (ehtim.Image or similar): input image object.
+    * bin_size (float): radial bin size for fallback profile.
+    * patch_frac (float): corner patch fraction for background estimate.
+    * n_theta (int): number of rays for radial scans.
+    * step (float): step size along each ray (pixels).
+
+    **Returns**:
+    * radius (float): median peak radius across rays or from fallback profile.
+    * width (float): median FWHM-like width across rays or from fallback.
+    * peak_value (float): maximum peak level found.
+    * background (float): estimated background level.
+    * center (tuple[float, float]): (xc, yc) using image midpoint.
+
+    """
     data = _img_to_array(img)
     h, w = data.shape
     bkg = _estimate_background(data, patch_frac=patch_frac)
@@ -156,7 +252,9 @@ def estimate_ring_parameters(img, bin_size=1.0, patch_frac=0.12, n_theta=180, st
             widths.append(float(max(1e-6, rR - rL)))
 
     if len(radii) == 0:
-        """Fallback: use global radial profile if rays fail."""
+        """
+        Fallback: use global radial profile if rays fail.
+        """
         r, prof = _radial_profile(data, xc, yc, bin_size=bin_size)
         ps = _smooth_profile(prof)
         idx = int(np.nanargmax(ps))
@@ -170,9 +268,21 @@ def estimate_ring_parameters(img, bin_size=1.0, patch_frac=0.12, n_theta=180, st
 
     return radius, width, peak_value, float(bkg), (xc, yc)
 
-
 def rbp_find_bright_points(img, threshold=None, radius=None, margin=None, max_it=999):
-    """Recursive brightest-point finder with circular blanking."""
+    """
+    Recursive brightest-point finder with circular blanking.
+
+    **Args**:
+    * img (ehtim.Image or similar): input image object.
+    * threshold (float or None): minimum brightness to accept a point; if None, auto.
+    * radius (float or None): blanking radius in pixels; if None, auto from width.
+    * margin (int or None): border margin to ignore; if None, derived from radius.
+    * max_it (int): maximum number of points to extract.
+
+    **Returns**:
+    * points (np.ndarray): shape (N, 2) array of (x, y) pixel coordinates.
+
+    """
     data = _img_to_array(img)
     if threshold is None or radius is None:
         r0, w0, pmax, bkg, _ = estimate_ring_parameters(img)
@@ -201,3 +311,102 @@ def rbp_find_bright_points(img, threshold=None, radius=None, margin=None, max_it
         dist = np.sqrt((xx - x) ** 2 + (yy - y) ** 2)
         mask[y0:y1, x0:x1][dist <= radius] = False
     return np.array(points)
+
+import numpy as np
+TAU = 2*np.pi
+
+def compute_ring_features(angles, radii, brightness, bins=360):
+    """
+    Compute single-number diagnostics from per-angle ring samples.
+
+    **Args**:
+    * angles (array-like): angles in radians for each sample.
+    * radii (array-like): radius at each angle (pixels).
+    * brightness (array-like): brightness/intensity per sample.
+    * bins (int): even number of angular bins for pairing and widths.
+
+    **Returns**:
+    * features (dict): {
+        mean_radius, std_radius,
+        radial_asymmetry, brightness_asymmetry,
+        angular_brightness_R, angular_brightness_circstd_rad,
+        angular_brightness_circstd_deg, angular_brightness_FWHM_deg,
+        samples_used, bins
+      }
+
+    """
+    a = np.asarray(angles, float).ravel()
+    r = np.asarray(radii, float).ravel()
+    b = np.asarray(brightness, float).ravel()
+    m = np.isfinite(a) & np.isfinite(r) & np.isfinite(b)
+    a, r, b = a[m] % TAU, r[m], b[m]
+    if a.size < 8 or (bins % 2): 
+        raise ValueError("Need >=8 samples and even `bins`.")
+    mean_radius, std_radius = float(r.mean()), float(r.std())
+
+    # Uniform angular bins
+    edges = np.linspace(0, TAU, bins+1)
+    idx = np.digitize(a, edges, right=False) - 1
+    idx[idx == bins] = 0
+    cnt = np.bincount(idx, minlength=bins)
+    rsum = np.bincount(idx, weights=r, minlength=bins)
+    bsum = np.bincount(idx, weights=b, minlength=bins)
+    r_u = rsum / np.maximum(1, cnt)
+    b_u = bsum.astype(float)
+    th = 0.5*(edges[:-1] + edges[1:])
+
+    # Opposite-angle asymmetries
+    def _opp_asym(x, norm):
+        d = np.abs(x - np.roll(x, x.size//2)).mean()
+        return float(d / (norm if norm > 0 else 1.0))
+    radial_asym = _opp_asym(r_u, mean_radius)
+    mean_b = float(b_u.mean())
+    brightness_asym = _opp_asym(b_u, mean_b)
+
+    # Circular concentration & circular std (brightness-weighted)
+    W = b_u.sum()
+    if W <= 0 or not np.isfinite(W):
+        R = 0.0; circstd_rad = np.nan
+    else:
+        C = float((b_u*np.cos(th)).sum()/W)
+        S = float((b_u*np.sin(th)).sum()/W)
+        R = float(np.hypot(C, S))
+        circstd_rad = (np.sqrt(max(0.0, -2*np.log(R))) if R > 0 else np.inf)
+    circstd_deg = float(np.degrees(circstd_rad)) if np.isfinite(circstd_rad) else np.nan
+
+    # FWHM (deg) of largest brightness peak (simple half-max crossing)
+    def _fwhm_deg(y):
+        n = y.size
+        k = int(np.argmax(y)); ymax = float(y[k])
+        if not np.isfinite(ymax) or ymax <= 0: return np.nan
+        half = 0.5*ymax
+        def cross(start, step):
+            i = start
+            for _ in range(n):
+                j = (i + step) % n
+                yi, yj = y[i], y[j]
+                if (yi - half)*(yj - half) <= 0 and yi != yj:
+                    frac = (half - yi)/(yj - yi)
+                    return (i + frac*step) % n
+                i = j
+            return None
+        L, Rr = cross(k, -1), cross(k, +1)
+        if L is None or Rr is None: return np.nan
+        dth = TAU/n
+        w = ((Rr - L) % n)*dth
+        if w > np.pi: w = TAU - w
+        return float(np.degrees(w))
+    fwhm = _fwhm_deg(b_u)
+
+    return {
+        "mean_radius": mean_radius,
+        "std_radius": std_radius,
+        "radial_asymmetry": radial_asym,
+        "brightness_asymmetry": brightness_asym,
+        "angular_brightness_R": R,
+        "angular_brightness_circstd_rad": float(circstd_rad),
+        "angular_brightness_circstd_deg": float(circstd_deg),
+        "angular_brightness_FWHM_deg": float(fwhm),
+        "samples_used": int(a.size),
+        "bins": int(bins),
+    }

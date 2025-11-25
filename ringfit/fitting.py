@@ -1,155 +1,298 @@
+# ============================
+# fitting.py
+# ============================
+
+"""
+====================================
+
+* **Filename**:          fitting.py
+* **Author**:            Frank Myhre
+* **Description**:       Geometric fitters (circle, ellipse, limacon) and a unified general_fit interface.
+
+====================================
+
+**Notes**
+* Fitters assume a fixed center (xs, ys) and estimate only shape parameters.
+* `general_fit` standardizes outputs for downstream use and tests:
+  returns "shape", "params", "center", "success", "cost", and optional "desired".
+"""
+
+from __future__ import annotations
+
 import numpy as np
-from scipy.optimize import minimize
+
+TAU = 2.0 * np.pi
+
+__all__ = [
+    "fit_circle",
+    "fit_ellipse",
+    "fit_limacon",
+    "general_fit",
+]
+
+
+def _validate_points(points):
+    """
+    Validate input points array.
+
+    **Args**:
+    * points (array-like): expected shape (N, 2).
+
+    **Returns**:
+    * pts (np.ndarray): float array of shape (N, 2).
+
+    """
+    pts = np.asarray(points, dtype=float)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        raise ValueError(f"`points` must be (N,2), got shape {pts.shape}")
+    if pts.shape[0] < 3:
+        raise ValueError("Need at least 3 points.")
+    return pts
+
 
 def fit_circle(points, xs, ys):
-    """Quick circle fit: mean radius from center."""
-    r = np.sqrt((points[:, 0] - xs) ** 2 + (points[:, 1] - ys) ** 2)
-    return r.mean()
+    """
+    Fit a circle radius with fixed center.
 
-def fit_ellipse(points, xs, ys):
-    """Axis-only ellipse fit around (xs, ys)."""
-    x, y = points[:, 0] - xs, points[:, 1] - ys
-    def cost(ab):
-        a, b = ab
-        if a <= 0 or b <= 0:
-            return 1e12
-        return np.sum(((x / a) ** 2 + (y / b) ** 2 - 1) ** 2)
-    a0 = np.std(x)
-    b0 = np.std(y)
-    res = minimize(cost, [a0, b0], method="Powell")
-    a, b = res.x if res.success else (a0, b0)
-    return 2 * a, 2 * b
+    **Args**:
+    * points (array-like): (N, 2) sample points.
+    * xs (float): fixed x-center.
+    * ys (float): fixed y-center.
 
-def fit_limacon(points, xs, ys):
-    """Limacon fit: r = c*(1 + L2*cos(theta - phi))."""
-    dx, dy = points[:, 0] - xs, points[:, 1] - ys
-    r_obs = np.sqrt(dx * dx + dy * dy)
-    th_obs = np.arctan2(dy, dx)
-    def cost(params):
-        c, L2, phi = params
-        if c <= 0 or abs(L2) >= 1:
-            return 1e12
-        r_pred = c * (1 + L2 * np.cos(th_obs - phi))
-        return np.sum((r_obs - r_pred) ** 2)
-    c0 = r_obs.mean()
-    L20 = 0.1
-    phi0 = 0.0
-    res = minimize(cost, [c0, L20, phi0], method="Powell")
-    c, L2, phi = (res.x if res.success else (c0, L20, phi0))
-    if L2 < 0:
-        L2 = -L2
-        phi = _wrap_angle_pi(phi + np.pi)
-    return float(c), float(L2), float(phi)
+    **Returns**:
+    * r_est (float): estimated radius.
 
-def _wrap_angle_pi(phi):
-    """Wrap angle to [-pi, pi]."""
-    return (phi + np.pi) % (2 * np.pi) - np.pi
-
-def _default_desired(shape, params, xs, ys):
-    """Tiny helper: standard fields for outputs."""
-    out = {"center": (float(xs), float(ys))}
-    if shape == "circle":
-        (r,) = params
-        out.update({
-            "radius": float(r),
-            "diameter": float(2 * r),
-            "area": float(np.pi * r * r),
-            "circumference": float(2 * np.pi * r),
-        })
-    elif shape == "ellipse":
-        d2a, d2b = params
-        a = 0.5 * float(d2a)
-        b = 0.5 * float(d2b)
-        h = ((a - b) ** 2) / ((a + b) ** 2) if (a + b) != 0 else 0.0
-        perim = np.pi * (a + b) * (1 + (3 * h) / (10 + np.sqrt(4 - 3 * h))) if (a + b) > 0 else 0.0
-        ecc = np.sqrt(1 - (min(a, b) / max(a, b)) ** 2) if max(a, b) > 0 else 0.0
-        out.update({
-            "a": a,
-            "b": b,
-            "diameters": (float(d2a), float(d2b)),
-            "area": float(np.pi * a * b),
-            "perimeter_approx": float(perim),
-            "eccentricity_approx": float(ecc),
-        })
-    elif shape == "limacon":
-        c, L2, phi = params
-        out.update({
-            "c": float(c),
-            "L2": float(L2),
-            "phi": float(_wrap_angle_pi(phi)),
-            "r_max": float(c * (1 + abs(L2))),
-            "r_min": float(c * (1 - abs(L2))),
-        })
-    return out
-
-def general_fit(
-    points,
-    xs,
-    ys,
-    *,
-    shape="circle",
-    method="Powell",
-    options=None,
-    bounds=None,
-    return_desired=False,
-    desired=None,
-):
-    """Unified fitter for circle/ellipse/limacon around (xs, ys)."""
-    shape = str(shape).lower()
-    points = np.asarray(points, dtype=float)
+    """
+    pts = _validate_points(points)
     xs = float(xs)
     ys = float(ys)
-    if points.ndim != 2 or points.shape[1] != 2:
-        raise ValueError("points must be an (N, 2) array.")
+    dx = pts[:, 0] - xs
+    dy = pts[:, 1] - ys
+    rr = np.sqrt(dx * dx + dy * dy)
+    return float(np.mean(rr))
+
+
+def fit_ellipse(points, xs, ys):
+    """
+    Fit axis-aligned ellipse diameters (2a, 2b) with fixed center.
+
+    Points assumed generated by:
+      x = xs + a*cos(theta) + noise
+      y = ys + b*sin(theta) + noise
+
+    **Args**:
+    * points (array-like): (N, 2) sample points.
+    * xs (float): fixed x-center.
+    * ys (float): fixed y-center.
+
+    **Returns**:
+    * d2a_est (float): estimated diameter along x (2a).
+    * d2b_est (float): estimated diameter along y (2b).
+
+    """
+    pts = _validate_points(points)
+    xs = float(xs)
+    ys = float(ys)
+    dx = pts[:, 0] - xs
+    dy = pts[:, 1] - ys
+
+    # For uniform theta: Var(a cos θ) = a^2/2  => a ≈ sqrt(2)*std(dx)
+    a_est = np.sqrt(2.0) * float(np.std(dx))
+    b_est = np.sqrt(2.0) * float(np.std(dy))
+
+    return float(2.0 * a_est), float(2.0 * b_est)
+
+
+def fit_limacon(points, xs, ys):
+    """
+    Fit limacon parameters (c, L2, phi) with fixed center.
+
+    Model:
+      r(θ) = c * (1 + L2 * cos(θ - phi))
+
+    Linearized regression:
+      r = A + B*cosθ + D*sinθ
+    where:
+      A = c
+      B = c*L2*cos(phi)
+      D = c*L2*sin(phi)
+
+    **Args**:
+    * points (array-like): (N, 2) sample points.
+    * xs (float): fixed x-center.
+    * ys (float): fixed y-center.
+
+    **Returns**:
+    * c_est (float): estimated c.
+    * L2_est (float): estimated L2.
+    * phi_est (float): estimated phi in radians.
+
+    """
+    pts = _validate_points(points)
+    xs = float(xs)
+    ys = float(ys)
+    dx = pts[:, 0] - xs
+    dy = pts[:, 1] - ys
+
+    th = np.arctan2(dy, dx) % TAU
+    r = np.sqrt(dx * dx + dy * dy)
+
+    M = np.column_stack([np.ones_like(th), np.cos(th), np.sin(th)])
+    coef, *_ = np.linalg.lstsq(M, r, rcond=None)
+    A, B, D = coef
+
+    c_est = float(A)
+    amp = float(np.hypot(B, D))
+    if not np.isfinite(c_est) or c_est <= 0:
+        c_est = float(np.median(r))
+    L2_est = float(amp / c_est) if c_est != 0 else 0.0
+    phi_est = float(np.arctan2(D, B))
+
+    return c_est, L2_est, phi_est
+
+
+def _circle_cost(points, xs, ys, r):
+    """
+    Mean squared radial residual for circle.
+
+    **Args**:
+    * points (np.ndarray): (N,2) points.
+    * xs (float): x-center.
+    * ys (float): y-center.
+    * r (float): radius.
+
+    **Returns**:
+    * cost (float): mean squared error.
+
+    """
+    dx = points[:, 0] - xs
+    dy = points[:, 1] - ys
+    rr = np.sqrt(dx * dx + dy * dy)
+    return float(np.mean((rr - r) ** 2))
+
+
+def _ellipse_cost(points, xs, ys, d2a, d2b):
+    """
+    Mean squared implicit residual for axis-aligned ellipse.
+
+    **Args**:
+    * points (np.ndarray): (N,2) points.
+    * xs (float): x-center.
+    * ys (float): y-center.
+    * d2a (float): x-diameter.
+    * d2b (float): y-diameter.
+
+    **Returns**:
+    * cost (float): mean squared error.
+
+    """
+    a = 0.5 * d2a
+    b = 0.5 * d2b
+    dx = points[:, 0] - xs
+    dy = points[:, 1] - ys
+    val = (dx / a) ** 2 + (dy / b) ** 2
+    return float(np.mean((val - 1.0) ** 2))
+
+
+def _limacon_cost(points, xs, ys, c, L2, phi):
+    """
+    Mean squared radial residual for limacon.
+
+    **Args**:
+    * points (np.ndarray): (N,2) points.
+    * xs (float): x-center.
+    * ys (float): y-center.
+    * c (float): c parameter.
+    * L2 (float): L2 parameter.
+    * phi (float): phi phase.
+
+    **Returns**:
+    * cost (float): mean squared error.
+
+    """
+    dx = points[:, 0] - xs
+    dy = points[:, 1] - ys
+    th = np.arctan2(dy, dx) % TAU
+    rr = np.sqrt(dx * dx + dy * dy)
+    model = c * (1.0 + L2 * np.cos(th - phi))
+    return float(np.mean((rr - model) ** 2))
+
+
+_DEFAULT_DESIRED = {
+    "circle": {
+        "radius": lambda p, xs, ys: float(p[0]),
+    },
+    "ellipse": {
+        "area": lambda p, xs, ys: float(np.pi * (0.5 * p[0]) * (0.5 * p[1])),
+    },
+    "limacon": {
+        "c": lambda p, xs, ys: float(p[0]),
+        "phi": lambda p, xs, ys: float(p[2]),
+    },
+}
+
+
+def general_fit(points, xs, ys, shape="circle", method="Powell",
+                bounds=None, return_desired=False, desired=None, **kwargs):
+    """
+    General dispatcher for fitting supported shapes.
+
+    **Args**:
+    * points (array-like): (N,2) sample points.
+    * xs (float): fixed x-center.
+    * ys (float): fixed y-center.
+    * shape (str): "circle", "ellipse", or "limacon".
+    * method (str): optimization method (kept for API compatibility).
+    * bounds (list or None): parameter bounds (kept for API compatibility).
+    * return_desired (bool): if True attach diagnostics under "desired".
+    * desired (dict or None): optional custom desired dict of callables.
+    * **kwargs: ignored extra options for forward compatibility.
+
+    **Returns**:
+    * res (dict): standardized fit result with keys:
+      shape, params, center, success, cost[, desired]
+
+    """
+    pts = _validate_points(points)
+    xs = float(xs)
+    ys = float(ys)
+    shape = str(shape).lower().strip()
 
     if shape == "circle":
-        r = fit_circle(points, xs, ys)
-        params = (float(r),)
+        r_est = fit_circle(pts, xs, ys)
+        params = (float(r_est),)
+        cost = _circle_cost(pts, xs, ys, r_est)
 
     elif shape == "ellipse":
-        x, y = points[:, 0] - xs, points[:, 1] - ys
-        def ell_cost(ab):
-            a, b = ab
-            if a <= 0 or b <= 0:
-                return 1e12
-            return np.sum(((x / a) ** 2 + (y / b) ** 2 - 1) ** 2)
-        a0 = np.std(x)
-        b0 = np.std(y)
-        x0 = np.array([a0, b0], dtype=float)
-        res = minimize(ell_cost, x0, method=method, bounds=bounds, options=options if options is not None else None)
-        if res.success:
-            a, b = res.x
-        else:
-            a, b = a0, b0
-        params = (float(2 * a), float(2 * b))
+        d2a_est, d2b_est = fit_ellipse(pts, xs, ys)
+        params = (float(d2a_est), float(d2b_est))
+        cost = _ellipse_cost(pts, xs, ys, d2a_est, d2b_est)
 
     elif shape == "limacon":
-        dx, dy = points[:, 0] - xs, points[:, 1] - ys
-        r_obs = np.sqrt(dx * dx + dy * dy)
-        th_obs = np.arctan2(dy, dx)
-        def lim_cost(params_vec):
-            c, L2, phi = params_vec
-            if c <= 0 or abs(L2) >= 1:
-                return 1e12
-            r_pred = c * (1 + L2 * np.cos(th_obs - phi))
-            return np.sum((r_obs - r_pred) ** 2)
-        c0 = float(np.mean(r_obs))
-        L20 = 0.1
-        phi0 = 0.0
-        x0 = np.array([c0, L20, phi0], dtype=float)
-        default_bounds = [(1e-12, None), (-0.999, 0.999), (-2 * np.pi, 2 * np.pi)]
-        use_bounds = bounds if bounds is not None else default_bounds
-        res = minimize(lim_cost, x0, method=method, bounds=use_bounds, options=options if options is not None else None)
-        if res.success:
-            c, L2, phi = res.x
-        else:
-            c, L2, phi = x0
-        if L2 < 0:
-            L2 = -L2
-            phi = _wrap_angle_pi(phi + np.pi)
-        params = (float(c), float(L2), float(phi))
+        c_est, L2_est, phi_est = fit_limacon(pts, xs, ys)
+        params = (float(c_est), float(L2_est), float(phi_est))
+        cost = _limacon_cost(pts, xs, ys, c_est, L2_est, phi_est)
 
     else:
-        raise ValueError("shape must be one of: 'circle', 'ellipse', 'limacon'.")
+        raise ValueError(f"Unknown shape '{shape}'")
 
-    return {"shape": shape, "params": params, "center": (xs, ys)}
+    res = {
+        "shape": shape,
+        "params": params,
+        "center": (xs, ys),
+        "success": True,
+        "cost": float(max(0.0, cost)),
+    }
+
+    if return_desired:
+        desired_funcs = desired if desired is not None else _DEFAULT_DESIRED.get(shape, {})
+        desired_vals = {}
+        p_arr = np.asarray(params, float)
+        for k, fn in desired_funcs.items():
+            try:
+                desired_vals[k] = fn(p_arr, xs, ys)
+            except Exception:
+                desired_vals[k] = None
+        res["desired"] = desired_vals
+
+    return res
