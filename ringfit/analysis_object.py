@@ -1,160 +1,230 @@
+# ============================
+# analysis.py
+# ============================
+
+"""
+====================================
+
+* **Filename**:          analysis.py
+* **Author**:            Frank Myhre
+* **Description**:       High-level analysis container for ring feature extraction.
+
+====================================
+
+**Notes**
+* Provides an AnalysisObject wrapper to manage an image plus defaults for ring
+  analysis routines.
+* Currently includes bright-point detection with optional masking.
+"""
+
+from __future__ import annotations
+
+from typing import List, Optional, Tuple
+
 import numpy as np
-import matplotlib.pyplot as plt
-from . import extraction as ex
-from . import utils
+
 
 class AnalysisObject:
-    """Small, simple holder for image + quick ring diagnostics."""
+    """
+    Container for image-derived analysis and feature extraction.
+    """
 
-    def __init__(self, im):
-        """Grab image + basic meta once."""
-        self.image = im
-        self.data = im.imarr()
-        self.xdim = im.xdim
-        self.ydim = im.ydim
-        self.cell = im.psize
-        self.ra = im.ra
-        self.dec = im.dec
-        self.peak = getattr(im, "peak", None)
-        self.total_flux = im.total_flux()
-        self.compute_centers()
-        self.bright_points = None
-
-    def compute_centers(self):
-        """Just the simple ones we actually use."""
-        self.geo_c = utils.geometric_centroid(self.data)
-        self.q25_c = utils.threshold_center(self.data, q=25)
-
-    def find_bright_points(self, threshold=0.5, radius=5.0, margin=None, max_it=999):
-        """Primary bright-point finder (recursive blanking)."""
-        self.bright_points = ex.rbp_find_bright_points(self.image, threshold, radius, margin, max_it)
-        return self.bright_points
-
-    def plot_centers(self):
-        """Show image with our reference centers."""
-        fig, ax = plt.subplots(figsize=(6, 6))
-        extent = [0, self.xdim * self.cell, 0, self.ydim * self.cell]
-        ax.imshow(self.data, origin="lower", cmap="afmhot", extent=extent)
-        gx, gy = self.geo_c
-        tx, ty = self.q25_c
-        ax.plot(gx * self.cell, gy * self.cell, "wo", label="Geometric")
-        ax.plot(tx * self.cell, ty * self.cell, "bo", label="Threshold")
-        ax.legend(loc="upper right")
-        ax.set_xlabel("x [radian]")
-        ax.set_ylabel("y [radian]")
-        return fig
-
-    def plot_angle_profiles(
+    def __init__(
         self,
-        n_angles=20,
-        center="q25",            # keep it simple: default to threshold center
-        normalize=True,          # <- now normalize brightness (0..1)
+        image,
         *,
-        threshold_factor=0.01,   # used to seed bright-point extraction
-        mask_mult=5.0,
-        reuse_points=True,
-    ):
+        default_radius: Optional[float] = None,
+        default_mask_radius: Optional[float] = None,
+    ) -> None:
         """
-        Super-simple version:
-        - Pick center (default: threshold center).
-        - Use bright points only.
-        - Clock-style angle: 12→0°, 3→90°, 6→180°, 9→270°.
-        - Bin 0..360° into `n_angles`, keep *brightest* point per bin.
-        - Plots: image+points | Radius vs Angle | Brightness vs Angle (optionally normed).
+        Initialize an AnalysisObject.
+
+        **Args**:
+        * image (ehtim.image.Image or array-like): source image.
+        * default_radius (float, optional): default neighborhood/sample radius
+          (pixels) for analysis functions (e.g., local maxima / ring sampling).
+          If None, per-function fallbacks are used.
+        * default_mask_radius (float, optional): default masking radius to suppress
+          the bright core / center. If < 1.0, interpreted as a fraction of the
+          image half-size. If >= 1.0, interpreted as pixels. If None, masking is
+          disabled by default unless explicitly provided per call.
+
+        **Returns**:
+        * None
+
         """
-        data = self.data
-        H, W = data.shape
+        self.image = image
+        self.default_radius = default_radius
+        self.default_mask_radius = default_mask_radius
 
-        # ring stats to seed bright-point search and (optionally) normalize brightness
-        r_est, w_est, pmax, bkg, (xc_est, yc_est) = ex.estimate_ring_parameters(self.image)
+        # Results
+        self.bright_points: List[Tuple[float, float]] = []
+        self.center: Optional[Tuple[float, float]] = None
 
-        # ensure we have plenty of bright points
-        if (self.bright_points is None) or (not reuse_points) or (len(self.bright_points) == 0):
-            thr = bkg + float(threshold_factor) * (pmax - bkg)
-            mask_r = max(1.0, float(mask_mult) * w_est)
-            self.find_bright_points(threshold=thr, radius=mask_r)
-        if self.bright_points is None or len(self.bright_points) == 0:
-            fig, ax = plt.subplots(1, 1, figsize=(5, 4))
-            ax.text(0.5, 0.5, "No bright points found", ha="center", va="center")
-            ax.set_axis_off()
-            return fig
+    # ---------- helpers ----------
 
-        pts = np.asarray(self.bright_points, float)
-        x = pts[:, 0]
-        y = pts[:, 1]
+    def _image_shape(self) -> Tuple[int, int]:
+        """
+        Returns (H, W) for numpy-like access. Tries eht-imaging Image first.
 
-        # choose center (no fitting, no extras)
-        if isinstance(center, (tuple, list, np.ndarray)) and len(center) == 2:
-            xs, ys = float(center[0]), float(center[1])
-        else:
-            key = str(center).lower()
-            if key in ("geo", "geometric"):
-                xs, ys = self.geo_c
-            elif key in ("ring", "est", "mid", "image"):
-                xs, ys = float(xc_est), float(yc_est)
-            else:  # "q25"/"threshold"/anything else → threshold center
-                xs, ys = self.q25_c
+        **Args**:
+        * None
 
-        # angles (clock) and radii w.r.t. chosen center
-        dx = x - xs
-        dy = y - ys  # origin='lower' → y is up in display
-        angles = (90.0 - np.degrees(np.arctan2(dy, dx))) % 360.0
-        radii = np.hypot(dx, dy)
+        **Returns**:
+        * shape (tuple[int, int]): (H, W) image shape.
 
-        # brightness at bright-point pixels
-        xi = np.clip(np.rint(x).astype(int), 0, W - 1)
-        yi = np.clip(np.rint(y).astype(int), 0, H - 1)
-        bright = data[yi, xi].astype(float)
+        """
+        im = self.image
+        for attr in ("imarr", "arr", "image", "data"):
+            if hasattr(im, attr):
+                arr = getattr(im, attr)
+                if isinstance(arr, np.ndarray):
+                    if arr.ndim == 2:
+                        return arr.shape
+                    if arr.ndim > 2:
+                        return arr.shape[-2], arr.shape[-1]
+        if isinstance(im, np.ndarray):
+            if im.ndim == 2:
+                return im.shape
+            if im.ndim > 2:
+                return im.shape[-2], im.shape[-1]
+        raise ValueError("Unable to infer image shape from provided image.")
 
-        # pick brightest in each bin to spread samples around ring
-        n_bins = int(max(1, n_angles))
-        edges = np.linspace(0.0, 360.0, n_bins + 1)
-        mids = 0.5 * (edges[:-1] + edges[1:])
+    def _image_array(self) -> np.ndarray:
+        """
+        Get a clean 2D numpy array from the image.
 
-        pick_ang, pick_rad, pick_bri, pick_xy = [], [], [], []
-        for i in range(n_bins):
-            a0, a1 = edges[i], edges[i + 1]
-            sel = (angles >= a0) & (angles < a1) if i < n_bins - 1 else (angles >= a0) & (angles <= a1)
-            if not np.any(sel):
-                continue
-            jloc = np.argmax(bright[sel])
-            j = np.flatnonzero(sel)[jloc]
-            pick_ang.append(mids[i])
-            pick_rad.append(radii[j])
-            pick_bri.append(bright[j])
-            pick_xy.append((x[j], y[j]))
+        **Args**:
+        * None
 
-        # normalize brightness to 0..1 if requested (simple background/peak scale)
-        if normalize and pick_bri:
-            denom = max(pmax - bkg, 1e-12)
-            pick_bri = np.clip((np.asarray(pick_bri) - bkg) / denom, 0.0, 1.0).tolist()
+        **Returns**:
+        * arr (np.ndarray): 2D float array (H, W) representing image data.
 
-        # figure
-        fig, (ax_img, ax_r, ax_b) = plt.subplots(1, 3, figsize=(12, 4), constrained_layout=True)
+        """
+        im = self.image
+        for attr in ("imarr", "arr", "image", "data"):
+            if hasattr(im, attr):
+                arr = getattr(im, attr)
+                if isinstance(arr, np.ndarray):
+                    return arr if arr.ndim == 2 else arr.squeeze()
+        if isinstance(im, np.ndarray):
+            return im if im.ndim == 2 else im.squeeze()
+        raise ValueError("Unable to obtain ndarray from image.")
 
-        # left panel: image + all bright points + selected per-bin + center used
-        ax_img.imshow(data, origin="lower", cmap="afmhot")
-        ax_img.scatter(x, y, s=10, c="c")
-        if pick_xy:
-            sel = np.asarray(pick_xy)
-            ax_img.scatter(sel[:, 0], sel[:, 1], s=30, facecolors="none", edgecolors="w")
-        ax_img.plot([xs], [ys], "wx", ms=12, mew=2)
-        ax_img.set_xticks([]); ax_img.set_yticks([])
+    def _center_xy(self) -> Tuple[float, float]:
+        """
+        Returns analysis center. If self.center is set, use it;
+        otherwise use geometric image center.
 
-        # middle: radius vs angle (scatter only)
-        if pick_ang:
-            ax_r.scatter(pick_ang, pick_rad, s=30)
-        ax_r.set_xlim(0, 360)
-        ax_r.set_xticks([0, 90, 180, 270, 360])
-        ax_r.set_xlabel("Angle [deg]")
-        ax_r.set_ylabel("Radius [px]")
+        **Args**:
+        * None
 
-        # right: brightness vs angle (normalized if normalize=True)
-        if pick_ang:
-            ax_b.scatter(pick_ang, pick_bri, s=30)
-        ax_b.set_xlim(0, 360)
-        ax_b.set_xticks([0, 90, 180, 270, 360])
-        ax_b.set_xlabel("Angle [deg]")
-        ax_b.set_ylabel("Brightness" + (" [norm]" if normalize else ""))
+        **Returns**:
+        * center (tuple[float, float]): (xc, yc) pixel center.
 
-        return fig
+        """
+        if self.center is not None:
+            return self.center
+        H, W = self._image_shape()
+        return (W - 1) / 2.0, (H - 1) / 2.0
+
+    def _mask_radius_to_pixels(self, mask_radius: Optional[float]) -> Optional[float]:
+        """
+        Convert a user mask_radius (fraction or pixels) to pixels.
+        <1.0 => fraction of half-size (min(H,W)/2), >=1.0 => pixels.
+
+        **Args**:
+        * mask_radius (float or None): mask radius in fraction or pixels.
+
+        **Returns**:
+        * mask_px (float or None): mask radius in pixels.
+
+        """
+        if mask_radius is None:
+            return None
+        H, W = self._image_shape()
+        half = min(H, W) / 2.0
+        return mask_radius * half if (0 < mask_radius < 1.0) else mask_radius
+
+    # ---------- primary API ----------
+
+    def find_bright_points(
+        self,
+        *,
+        threshold: Optional[float] = None,
+        radius: Optional[float] = None,
+        mask_radius: Optional[float] = None,
+        max_points: Optional[int] = None,
+        normalize_brightness: bool = True,
+    ) -> List[Tuple[float, float]]:
+        """
+        Detect bright points on the ring with optional central masking.
+
+        **Args**:
+        * threshold (float, optional): absolute intensity threshold (image units).
+          If None, an automatic heuristic is used (percentile-based).
+        * radius (float, optional): neighborhood/sample radius in pixels.
+          Overrides `default_radius`. If None and default is None, uses 6.0.
+        * mask_radius (float, optional): center mask radius. If <1.0, treated as
+          fraction of image half-size; if >=1.0, treated as pixels. Overrides
+          `default_mask_radius`. If None and default is None, no masking.
+        * max_points (int, optional): cap on number of returned points after
+          sorting by brightness.
+        * normalize_brightness (bool): if True, normalize image to [0, 1]
+          before thresholding.
+
+        **Returns**:
+        * points (list[tuple[float, float]]): bright point coordinates (x, y).
+
+        """
+        arr = self._image_array().astype(float)
+
+        if normalize_brightness:
+            lo, hi = np.percentile(arr, 1), np.percentile(arr, 99)
+            if hi > lo:
+                arr = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
+
+        R = radius if radius is not None else (
+            self.default_radius if self.default_radius is not None else 6.0
+        )
+
+        mr_user = mask_radius if mask_radius is not None else self.default_mask_radius
+        mr_px = self._mask_radius_to_pixels(mr_user) if mr_user is not None else None
+
+        if mr_px is not None and mr_px > 0:
+            H, W = self._image_shape()
+            cx, cy = self._center_xy()
+            yy, xx = np.mgrid[0:H, 0:W]
+            dist = np.hypot(xx - cx, yy - cy)
+            arr = np.where(dist <= mr_px, 0.0, arr)
+
+        if threshold is None:
+            threshold = float(np.percentile(arr, 90))
+
+        H, W = arr.shape
+        rad = int(max(1, round(R)))
+        pts: List[Tuple[float, float, float]] = []
+
+        for y in range(rad, H - rad):
+            row = arr[y]
+            for x in range(rad, W - rad):
+                v = row[x]
+                if v < threshold:
+                    continue
+
+                y0, y1 = y - rad, y + rad + 1
+                x0, x1 = x - rad, x + rad + 1
+                patch = arr[y0:y1, x0:x1]
+                yy, xx = np.mgrid[y0:y1, x0:x1]
+                mask = (xx - x) ** 2 + (yy - y) ** 2 <= (rad ** 2)
+
+                if v >= np.max(patch[mask]):
+                    pts.append((float(x), float(y), float(v)))
+
+        pts.sort(key=lambda t: t[2], reverse=True)
+
+        if max_points is not None and max_points > 0:
+            pts = pts[:max_points]
+
+        self.bright_points = [(x, y) for (x, y, _) in pts]
+        return self.bright_points
