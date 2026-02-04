@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it."
+type: software
+title: "ringfit"
+authors:
+  - family-names: "Myhre"
+    given-names: "Frank"
+repository-code: "https://github.com/frabk1/ring_fitting"
+abstract: "Tools for extracting and geometrically fitting photon ring structures in astronomical images."
+license: "MIT"
