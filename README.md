@@ -25,7 +25,7 @@ For development or working with the latest code:
     pip install -e .
 
 ## Quickstart
-
+```python
     import ehtim as eh
     from ringfit.extraction import estimate_ring_parameters, rbp_find_bright_points
     from ringfit.fitting import general_fit
@@ -43,7 +43,7 @@ For development or working with the latest code:
     result = general_fit(points, xc, yc, shape="circle")
 
     print(result)
-
+```
 ## Repository structure
 
     ringfit/        Core library code
