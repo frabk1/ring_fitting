@@ -189,42 +189,30 @@ class AnalysisObject:
         )
 
         mr_user = mask_radius if mask_radius is not None else self.default_mask_radius
-        mr_px = self._mask_radius_to_pixels(mr_user) if mr_user is not None else None
-
-        if mr_px is not None and mr_px > 0:
-            H, W = self._image_shape()
-            cx, cy = self._center_xy()
-            yy, xx = np.mgrid[0:H, 0:W]
-            dist = np.hypot(xx - cx, yy - cy)
-            arr = np.where(dist <= mr_px, 0.0, arr)
+        mr_px = self._mask_radius_to_pixels(mr_user) if mr_user is not None else R
 
         if threshold is None:
             threshold = float(np.percentile(arr, 90))
 
         H, W = arr.shape
-        rad = int(max(1, round(R)))
-        pts: List[Tuple[float, float, float]] = []
+        active = np.ones((H, W), dtype=bool)
+        limit = max_points if (max_points is not None and max_points > 0) else 999
+        pts: List[Tuple[float, float]] = []
 
-        for y in range(rad, H - rad):
-            row = arr[y]
-            for x in range(rad, W - rad):
-                v = row[x]
-                if v < threshold:
-                    continue
+        for _ in range(limit):
+            masked = arr * active
+            peak = float(masked.max())
+            if peak < threshold:
+                break
+            y, x = np.unravel_index(np.argmax(masked), arr.shape)
+            pts.append((float(x), float(y)))
 
-                y0, y1 = y - rad, y + rad + 1
-                x0, x1 = x - rad, x + rad + 1
-                patch = arr[y0:y1, x0:x1]
-                yy, xx = np.mgrid[y0:y1, x0:x1]
-                mask = (xx - x) ** 2 + (yy - y) ** 2 <= (rad ** 2)
+            # Blank a circle of mr_px around this point
+            y0, y1 = max(0, y - int(mr_px)), min(H, y + int(mr_px) + 1)
+            x0, x1 = max(0, x - int(mr_px)), min(W, x + int(mr_px) + 1)
+            yy, xx = np.ogrid[y0:y1, x0:x1]
+            dist = np.sqrt((xx - x) ** 2 + (yy - y) ** 2)
+            active[y0:y1, x0:x1][dist <= mr_px] = False
 
-                if v >= np.max(patch[mask]):
-                    pts.append((float(x), float(y), float(v)))
-
-        pts.sort(key=lambda t: t[2], reverse=True)
-
-        if max_points is not None and max_points > 0:
-            pts = pts[:max_points]
-
-        self.bright_points = [(x, y) for (x, y, _) in pts]
+        self.bright_points = pts
         return self.bright_points
