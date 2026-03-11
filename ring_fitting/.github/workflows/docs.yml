@@ -21,10 +21,10 @@ jobs:
         run: pip install numpy scipy pdoc
 
       - name: Build docs
-        run: pdoc ./ring_fitting/ringfit -o ./ring_fitting/docs
+        run: pdoc ./ringfit -o ./docs
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./ring_fitting/docs
+          publish_dir: ./docs
