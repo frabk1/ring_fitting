@@ -21,7 +21,7 @@ jobs:
         run: pip install numpy scipy pdoc
 
       - name: Build docs
-        run: pdoc ./ringfit -o ./docs
+        run: pdoc ./ring_fitting/ringfit -o ./docs
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
